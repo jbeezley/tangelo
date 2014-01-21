@@ -119,6 +119,7 @@ set(JS_LINT_FILES
     ${CMAKE_SOURCE_DIR}/src/js/plugin/geonodelink.js
     ${CMAKE_SOURCE_DIR}/src/js/plugin/mapdots.js
     ${CMAKE_SOURCE_DIR}/src/js/plugin/nodelink.js
+    ${CMAKE_SOURCE_DIR}/src/js/plugin/spacemap.js
     ${CMAKE_SOURCE_DIR}/src/js/plugin/svgColorLegend.js
     ${CMAKE_SOURCE_DIR}/src/js/stream/_package.js
     ${CMAKE_SOURCE_DIR}/src/js/stream/stream.js
@@ -211,6 +212,7 @@ set(JS_UGLIFY_FILES
     ${CMAKE_SOURCE_DIR}/src/js/plugin/geonodelink.js
     ${CMAKE_SOURCE_DIR}/src/js/plugin/mapdots.js
     ${CMAKE_SOURCE_DIR}/src/js/plugin/nodelink.js
+    ${CMAKE_SOURCE_DIR}/src/js/plugin/spacemap.js
     ${CMAKE_SOURCE_DIR}/src/js/stream/_package.js
     ${CMAKE_SOURCE_DIR}/src/js/stream/stream.js
     ${CMAKE_SOURCE_DIR}/src/js/data/_package.js
