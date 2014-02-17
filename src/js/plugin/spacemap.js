@@ -1,6 +1,6 @@
 /*jslint browser: true, nomen: true */
 
-(function (tangelo, $, d3) {
+(function (tangelo, $, d3, google) {
     "use strict";
 
     if (!($ && $.widget && d3)) {
@@ -11,289 +11,241 @@
         return;
     }
 
-    $.widget("tangelo.spacemap", {
+    tangelo.widget("tangelo.spacemap", {
         options: {
-            data:           null,
-            attributes:     [],
-            color:          tangelo.accessor({value: "steelblue"}),
-            size:           tangelo.accessor({value: 10}),
-            label:          tangelo.accessor({value: ""}),
-            opacity:        tangelo.accessor({value: 1}),
-            width:          1000,
-            height:         1000
-        },
-
-        _accessors: {
-            "color": true,
-            "size": true,
-            "label": true,
-            "opacity": true
+            data: [],
+            constraints: [],
+            linkDistance: 20,
+            charge: -30,
+            label: tangelo.accessor({value: ""}),
+            width: $(window).width(),
+            height: $(window).height()
         },
 
         _create: function () {
-            var options;
+            var options,
+                mapConfig,
+                mapOptions,
+                that = this;
 
-            this.svg = d3.select(this.element.get(0))
-                .append("svg");
+            this.force = d3.layout.force();
+
+            mapConfig = {
+                initialize: function (svg) {
+                    that.svg = d3.select(svg);
+                    that._update();
+                },
+
+                draw: function (d) {
+                    this.shift(that.svg.node(), -d.translation.x, -d.translation.y);
+                    that.nodes.forEach(function(node) {
+                        var loc, googleLoc, pixelLoc;
+                        if (node.constraint && node.constraint.type === "map") {
+                            loc = node.constraint.accessor(node.data);
+                            googleLoc = new google.maps.LatLng(loc.lat, loc.lng);
+                            pixelLoc = d.projection.fromLatLngToContainerPixel(googleLoc);
+                            node.mapX = pixelLoc.x;
+                            node.mapY = pixelLoc.y;
+                        }
+                    });
+                    that.force.start();
+                    that._tick();
+                }
+            };
+
+            // Some options for initializing the google map.
+            mapOptions = {
+                zoom: 2,
+                center: new google.maps.LatLng(15, 0),
+                mapTypeId: google.maps.MapTypeId.ROADMAP
+            };
+            // this.map = new tangelo.GoogleMapSVG(this.element.get(0), mapOptions, mapConfig);
+            // this.map.on(["draw", "drag", "zoom_changed"], mapConfig.draw);
+            this.svg = d3.select(this.element.get(0)).append("svg");
 
             options = $.extend(true, {}, this.options);
             options.data = this.options.data;
             delete options.disabled;
             delete options.create;
             this._setOptions(options);
-        },
-
-        _setOption: function (key, value) {
-            if (this._accessors[key]) {
-                this._super(key, tangelo.accessor(value));
-            } else if (key === "attributes") {
-                this._super(key, value.map(function (spec) {
-                    return {
-                        type: spec.type,
-                        accessor: tangelo.accessor(spec.accessor)
-                    };
-                }));
-            } else {
-                this._super(key, value);
-            }
-        },
-
-        _setOptions: function (options) {
-            var that = this;
-
-            $.each(options, function (key, value) {
-                that._setOption(key, value);
-            });
-
             this._update();
         },
 
         _update: function () {
             var that = this,
-                nodeIdMap = {};
+                dataNodes = [],
+                colorScale,
+                nodeEnter,
+                oldNodes = this.nodes,
+                i;
 
-            if (this.options.nodeX) {
-                this.xScale = d3.scale.linear()
-                    .domain(d3.extent(this.options.data.nodes, this.options.nodeX))
-                    .range([50, this.options.width - 100]);
+            if (!this.svg) {
+                return;
             }
 
-            if (this.options.nodeY) {
-                this.yScale = d3.scale.linear()
-                    .domain(d3.extent(this.options.data.nodes, this.options.nodeY))
-                    .range([this.options.height - 100, 50]);
+            this.nodes = [];
+            this.links = [];
+            this.mapOpacity = 0;
+
+            this.options.data.forEach(function (d) {
+                var node = {data: d};
+                that.nodes.push(node);
+                dataNodes.push(node);
+            });
+
+            this.options.constraints.forEach(function (constraint, i) {
+                var scale, xScale, yScale;
+
+                constraint.nodeMap = {};
+                constraint.index = i;
+
+                if (constraint.type === "x") {
+                    scale = d3.scale.linear()
+                        .domain(d3.extent(that.options.data, constraint.accessor))
+                        .range([0, that.options.width]);
+                    constraint.constrain = function (d) {
+                        d.x = scale(constraint.accessor(d.data));
+                    };
+                } else if (constraint.type === "y") {
+                    scale = d3.scale.linear()
+                        .domain(d3.extent(that.options.data, constraint.accessor))
+                        .range([0, that.options.height]);
+                    constraint.constrain = function (d) {
+                        d.y = scale(constraint.accessor(d.data));
+                    };
+                } else if (constraint.type === "xy") {
+                    xScale = d3.scale.linear()
+                        .domain(d3.extent(that.options.data, function (d) {
+                            return constraint.accessor(d).x;
+                        }))
+                        .range([0, that.options.width]);
+                    yScale = d3.scale.linear()
+                        .domain(d3.extent(that.options.data, function (d) {
+                            return constraint.accessor(d).y;
+                        }))
+                        .range([0, that.options.height]);
+                    constraint.constrain = function (d) {
+                        d.x = xScale(constraint.accessor(d.data).x);
+                        d.y = yScale(constraint.accessor(d.data).y);
+                    };
+                } else if (constraint.type === "map") {
+                    that.mapOpacity = Math.max(that.mapOpacity, constraint.strength);
+                    constraint.constrain = function (d) {
+                        d.x = d.mapX;
+                        d.y = d.mapY;
+                    };
+                } else if (constraint.type === "link") {
+                    constraint.constrain = function () {};
+                }
+                dataNodes.forEach(function (node) {
+                    var values = constraint.accessor(node.data),
+                        i,
+                        value;
+                    if (!tangelo.isArray(values)) {
+                        values = [values];
+                    }
+                    for (i = 0; i < values.length; i += 1) {
+                        value = values[i];
+                        if (!tangelo.isString(value)) {
+                            value = JSON.stringify(value);
+                        }
+                        if (!constraint.nodeMap[value]) {
+                            constraint.nodeMap[value] = {data: node.data, value: value, constraint: constraint};
+                            that.nodes.push(constraint.nodeMap[value]);
+                        }
+                        that.links.push({source: node, target: constraint.nodeMap[value]});
+                    }
+                });
+            });
+
+            // Copy over x,y locations from old nodes
+            if (oldNodes) {
+                for (i = 0; i < this.nodes.length && i < oldNodes.length; i += 1) {
+                    this.nodes[i].x = oldNodes[i].x;
+                    this.nodes[i].y = oldNodes[i].y;
+                }
             }
 
-            this.force.linkDistance(this.options.linkDistance)
-                .charge(this.options.nodeCharge)
-                .size([this.options.width, this.options.height]);
-
-            this.options.data.nodes.forEach(function (d, i) {
-                nodeIdMap[that.options.nodeId(d, i)] = d;
-                d.degree = 0;
-                d.outgoing = [];
-                d.incoming = [];
-            });
-
-            this.options.data.links.forEach(function (d, i) {
-                d.source = nodeIdMap[that.options.linkSource(d, i)];
-                d.target = nodeIdMap[that.options.linkTarget(d, i)];
-                d.source.degree += 1;
-                d.target.degree += 1;
-                d.source.outgoing.push(d.target);
-                d.target.incoming.push(d.source);
-            });
-
-            this.options.data.nodes.sort(function (a, b) {
-                return d3.descending(a.degree, b.degree);
-            });
-
-            this.sizeScale = d3.scale.sqrt()
-                .domain(d3.extent(this.options.data.nodes, that.options.nodeSize))
-                .range([5, 15]);
-
-            this.force.size([this.options.width, this.options.height])
-                .nodes(this.options.data.nodes)
-                .links(this.options.data.links)
+            this.force
+                .linkDistance(this.options.linkDistance)
+                .linkStrength(function (link) {
+                    return link.target.constraint.strength;
+                })
+                .charge(this.options.charge)
+                .gravity(0.1)
+                //.chargeDistance(20)
+                .theta(0.1)
+                .size([this.options.width, this.options.height])
+                .nodes(this.nodes)
+                .links(this.links)
                 .start();
 
+            this.svg.selectAll(".link").remove();
+            this.svg.selectAll(".node").remove();
+
             this.link = this.svg.selectAll(".link")
-                .data(this.options.data.links);
+                .data(this.links);
 
             this.link.enter()
                 .append("line")
                 .classed("link", true)
-                .style("opacity", this.options.linkOpacity)
-                .style("stroke", "black")
+                .style("opacity", function (d) { return d.target.constraint.strength / 2; })
+                .style("stroke", "#999")
                 .style("stroke-width", 1);
 
             this.node = this.svg.selectAll(".node")
-                .data(this.options.data.nodes);
+                .data(this.nodes);
 
-            this.node.enter()
-                .append("circle")
+            nodeEnter = this.node.enter()
+                .append("g")
                 .classed("node", true)
-                .call(this.force.drag)
-                .append("title");
+                .call(this.force.drag);
+            nodeEnter.append("circle")
+                .style("stroke", "#fff")
+                .style("stroke-width", 0.5);
+            nodeEnter.append("text")
+                .text(function (d) {
+                    if (d.constraint) {
+                        if (d.constraint.type === "link") {
+                            return d.value;
+                        }
+                        return "";
+                    }
+                    return that.options.label(d);
+                });
+
+            colorScale = d3.scale.category10();
 
             this.node
-                .attr("r", function (d, i) {
-                    return that.sizeScale(that.options.nodeSize(d, i));
-                })
-                .style("fill", function (d, i) {
-                    return that.colorScale(that.options.nodeColor(d, i));
-                })
-                .style("opacity", this.options.nodeOpacity);
+                .style("opacity", function (d) { return d.constraint ? d.constraint.strength : 1; });
 
-            this.node.selectAll("title")
-                .text(this.options.nodeLabel);
-
-            if (!that.options.dynamicLabels) {
-                this.label = this.svg.selectAll("text")
-                    .data(this.options.data.nodes);
-
-                this.label.enter().append("text")
-                    .text(this.options.nodeLabel);
-            }
+            this.node.selectAll("circle")
+                .attr("r", function (d) { return d.constraint ? 4 : 6; })
+                .style("fill", function (d) { return colorScale(d.constraint ? d.constraint.index : -1); });
 
             this.force.on("tick", function () { that._tick.call(that); });
 
             this.force.resume();
+            // this.map.trigger("draw");
         },
 
         _tick: function() {
-            var that = this,
-                nodeLabels;
+            var that = this;
 
-            if (that.options.nodeX) {
-                that.options.data.nodes.forEach(function (d, i) {
-                    d.x = that.xScale(that.options.nodeX(d, i));
-                });
-            }
+            $(this.element.get(0)).find("img").css('opacity', this.mapOpacity);
 
-            if (that.options.nodeY) {
-                that.options.data.nodes.forEach(function (d, i) {
-                    d.y = that.yScale(that.options.nodeY(d, i));
-                });
-            }
-
-            if (that.options.dynamicLabels) {
-                nodeLabels = that._nodeLabels();
-
-                that.svg.selectAll("text").remove();
-                that.svg.selectAll("text")
-                    .data(nodeLabels)
-                    .enter().append("text")
-                    .attr("x", function (d) { return d.x; })
-                    .attr("y", function (d) { return d.y; })
-                    .style("font-size", function (d) { return d.count + 8; })
-                    .text(function (d) { return d.label; });
-            } else {
-                that.label.attr("x", function (d) { return d.x; })
-                    .attr("y", function (d) { return d.y; });
-            }
+            that.nodes.forEach(function (node) {
+                if (node.constraint) {
+                    node.constraint.constrain(node);
+                }
+            });
 
             that.link.attr("x1", function (d) { return d.source.x; })
                 .attr("y1", function (d) { return d.source.y; })
                 .attr("x2", function (d) { return d.target.x; })
                 .attr("y2", function (d) { return d.target.y; });
 
-            that.node.attr("cx", function (d) { return d.x; })
-                .attr("cy", function (d) { return d.y; });
-        },
-
-        // Compute a list of objects of the form:
-        // {
-        //   count: 5    /* The number of nodes represented */
-        //   label: "hi" /* A reduced label representing all nodes */
-        //   x: 10
-        //   y: 20       /* The x,y location to draw the label */
-        // }
-        // This will be a reduced set of the original node data.
-        _nodeLabels: function() {
-            var that = this,
-                nodeLabels = [];
-
-            that.options.data.nodes.forEach(function (d) {
-                d.visited = false;
-            });
-
-            // Walk the graph, collecting connected nodes
-            // close to the starting node to collapse into
-            // a single label.
-            that.options.data.nodes.forEach(function (d, i) {
-                var count = 0,
-                    labels = [],
-                    label;
-
-                function visit(dd) {
-                    if (dd.visited) {
-                        return;
-                    }
-
-                    if (Math.abs(dd.x - d.x) < 50 &&
-                            Math.abs(dd.y - d.y) < 50) {
-                        count += 1;
-                        labels.push(that.options.nodeLabel(dd, i));
-                        dd.visited = true;
-                        dd.incoming.forEach(visit);
-                        dd.outgoing.forEach(visit);
-                    }
-                }
-                visit(d);
-
-                if (count > 1) {
-                    label = that._reduceLabels(labels);
-                    nodeLabels.push({count: count, label: label, x: d.x, y: d.y});
-                }
-            });
-            return nodeLabels;
-        },
-
-        // Reduce a collection of labels into a single label
-        // using a frequent sequence of starting words.
-        _reduceLabels: function(labels) {
-            var label = "",
-                prefixTree = {},
-                word,
-                maxCount,
-                maxWord;
-
-            // Build prefix tree
-            labels.forEach(function (d) {
-                var words, subtree = prefixTree;
-                words = d.split(" ");
-                while (words.length > 0) {
-                    if (!subtree[words[0]]) {
-                        subtree[words[0]] = {count: 0, next: {}};
-                    }
-                    subtree[words[0]].count += 1;
-                    subtree = subtree[words[0]].next;
-                    words = words.slice(1);
-                }
-            });
-
-            // Traverse prefix tree for most common prefix
-            while (true) {
-                maxCount = 0;
-                maxWord = 0;
-                for (word in prefixTree) {
-                    if (prefixTree.hasOwnProperty(word)) {
-                        if (prefixTree[word].count > maxCount) {
-                            maxCount = prefixTree[word].count;
-                            maxWord = word;
-                        }
-                    }
-                }
-                if (maxCount < 2) {
-                    break;
-                }
-                label += " " + maxWord;
-                prefixTree = prefixTree[maxWord].next;
-            }
-
-            return label;
+            that.node.attr("transform", function (d) { return "translate(" + d.x + "," + d.y + ")"; });
         }
     });
-
-}(window.tangelo, window.jQuery, window.d3));
+}(window.tangelo, window.jQuery, window.d3, window.google));
