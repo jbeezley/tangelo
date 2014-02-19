@@ -17,6 +17,7 @@
             constraints: [],
             linkDistance: 20,
             charge: -30,
+            gravity: 0.1,
             label: tangelo.accessor({value: ""}),
             width: $(window).width(),
             height: $(window).height()
@@ -113,6 +114,20 @@
                     constraint.constrain = function (d) {
                         d.y = scale(constraint.accessor(d.data));
                     };
+                } else if (constraint.type === "ordinalx") {
+                    scale = d3.scale.ordinal()
+                        .domain(that.options.data.map(constraint.accessor))
+                        .rangePoints([0, that.options.width], 1);
+                    constraint.constrain = function (d) {
+                        d.x = scale(constraint.accessor(d.data));
+                    };
+                } else if (constraint.type === "ordinaly") {
+                    scale = d3.scale.ordinal()
+                        .domain(that.options.data.map(constraint.accessor))
+                        .rangePoints([0, that.options.height], 1);
+                    constraint.constrain = function (d) {
+                        d.y = scale(constraint.accessor(d.data));
+                    };
                 } else if (constraint.type === "xy") {
                     xScale = d3.scale.linear()
                         .domain(d3.extent(that.options.data, function (d) {
@@ -140,7 +155,8 @@
                 dataNodes.forEach(function (node) {
                     var values = constraint.accessor(node.data),
                         i,
-                        value;
+                        value,
+                        constraintNode;
                     if (!tangelo.isArray(values)) {
                         values = [values];
                     }
@@ -149,11 +165,17 @@
                         if (!tangelo.isString(value)) {
                             value = JSON.stringify(value);
                         }
-                        if (!constraint.nodeMap[value]) {
-                            constraint.nodeMap[value] = {data: node.data, value: value, constraint: constraint};
-                            that.nodes.push(constraint.nodeMap[value]);
+                        if (constraint.type === "link") {
+                            if (!constraint.nodeMap[value]) {
+                                constraint.nodeMap[value] = {data: node.data, value: value, constraint: constraint};
+                                that.nodes.push(constraint.nodeMap[value]);
+                            }
+                            that.links.push({source: node, target: constraint.nodeMap[value]});
+                        } else {
+                            constraintNode = {data: node.data, value: value, constraint: constraint};
+                            that.nodes.push(constraintNode);
+                            that.links.push({source: node, target: constraintNode});
                         }
-                        that.links.push({source: node, target: constraint.nodeMap[value]});
                     }
                 });
             });
@@ -172,7 +194,7 @@
                     return link.target.constraint.strength;
                 })
                 .charge(this.options.charge)
-                .gravity(0.1)
+                .gravity(this.options.gravity)
                 //.chargeDistance(20)
                 .theta(0.1)
                 .size([this.options.width, this.options.height])
@@ -206,7 +228,9 @@
             nodeEnter.append("text")
                 .text(function (d) {
                     if (d.constraint) {
-                        if (d.constraint.type === "link") {
+                        if (d.constraint.type === "link" ||
+                                d.constraint.type === "ordinalx" ||
+                                d.constraint.type === "ordinaly") {
                             return d.value;
                         }
                         return "";
